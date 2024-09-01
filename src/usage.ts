@@ -2,8 +2,14 @@ import { Bot } from "../deps.deno.ts";
 import { tap } from "./mod.ts";
 const bot = new Bot(Deno.env.get("TELEGRAM_TOKEN") ?? "");
 
+bot.use(async (_, next) => {
+  await next().catch(() => {});
+});
+
 bot.use(
-  tap({ serverUrl: Deno.env.get("TAP_SERVER_URL") ?? "", errors: "swallow" }),
+  tap({
+    serverUrl: Deno.env.get("TAP_SERVER_URL") ?? "",
+  }),
 );
 
 bot.command("start", (ctx) => ctx.reply("Hello, world!"));

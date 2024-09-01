@@ -9,13 +9,9 @@ export type TapOptions<C extends Context> = {
    */
   serverUrl: string;
   /**
-   * What to do with errors.
-   *
-   * - `"tap"`: Send the error to the tap server and rethrow. Allows custom error handling.
-   * - `"swallow"`: Send the error to the tap server and do not rethrow. No custom error handling.
-   * - `"throw"`: Do nothing and just rethrow the error.
+   * Whether to send errors to the tap server.
    */
-  errors?: "tap" | "swallow" | "throw";
+  tapErrors?: boolean;
   /**
    * Custom properties to send with the update.
    */
@@ -32,7 +28,7 @@ export const apiTap =
   (serverUrl: string): Transformer => async (prev, method, payload, signal) => {
     const response = await prev(method, payload, signal);
 
-    await fetch(`${serverUrl}/requests`, {
+    await fetch(`${serverUrl}/request`, {
       method: "POST",
       body: JSON.stringify({ method, payload, response }),
       signal,
@@ -52,8 +48,7 @@ export const apiTap =
 export const udpateTap =
   <C extends Context>(options: TapOptions<C>): MiddlewareFn<C> =>
   async (ctx, next) => {
-    const { serverUrl, errors = "tap", customProperties } = options;
-    const catchErrors = errors === "tap" || errors === "swallow";
+    const { serverUrl, tapErrors = true, customProperties } = options;
 
     const body = {
       ...customProperties?.(ctx),
@@ -61,15 +56,17 @@ export const udpateTap =
     };
 
     try {
-      await next();
-      await fetch(`${serverUrl}/updates`, {
-        method: "POST",
-        body: JSON.stringify(body),
-      }).catch((err) =>
-        console.error(`Failed to send update to tap server: ${err}`)
-      );
+      await Promise.all([
+        next(),
+        fetch(`${serverUrl}/update`, {
+          method: "POST",
+          body: JSON.stringify(body),
+        }).catch((err) =>
+          console.error(`Failed to send update to tap server: ${err}`)
+        ),
+      ]);
     } catch (error) {
-      if (catchErrors) {
+      if (tapErrors) {
         const body = {
           error: {
             message: error.message ?? "No error message",
@@ -80,7 +77,7 @@ export const udpateTap =
           update: ctx.update,
         };
 
-        await fetch(`${serverUrl}/errors`, {
+        await fetch(`${serverUrl}/botError`, {
           method: "POST",
           body: JSON.stringify(body),
         }).catch((err) =>
@@ -88,7 +85,7 @@ export const udpateTap =
         );
       }
 
-      if (errors !== "swallow") throw error;
+      throw error;
     }
   };
 
