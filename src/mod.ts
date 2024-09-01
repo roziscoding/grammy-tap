@@ -16,7 +16,31 @@ export type TapOptions<C extends Context> = {
    * Custom properties to send with the update.
    */
   customProperties?: (ctx: C) => Record<string, unknown>;
+  /**
+   * The session ID to use for the tap server.
+   */
+  sessionId?: string;
 };
+
+export type TapFlavor = {
+  tap: {
+    uuid: string;
+  };
+};
+
+function fetchWithUUID(
+  uuid: string,
+  url: string,
+  options: RequestInit,
+): Promise<Response> {
+  return fetch(url, {
+    ...options,
+    headers: {
+      ...options.headers,
+      "x-session-id": uuid,
+    },
+  });
+}
 
 /**
  * Taps every request sent to the Telegram API.
@@ -25,10 +49,11 @@ export type TapOptions<C extends Context> = {
  * @returns A transformer that sends the request to the tap server.
  */
 export const apiTap =
-  (serverUrl: string): Transformer => async (prev, method, payload, signal) => {
+  (serverUrl: string, uuid: string): Transformer =>
+  async (prev, method, payload, signal) => {
     const response = await prev(method, payload, signal);
 
-    await fetch(`${serverUrl}/request`, {
+    await fetchWithUUID(uuid, `${serverUrl}/request`, {
       method: "POST",
       body: JSON.stringify({ method, payload, response }),
       signal,
@@ -45,49 +70,52 @@ export const apiTap =
  * @param options - The options for the tap middleware.
  * @returns A middleware that sends the update to the tap server.
  */
-export const udpateTap =
-  <C extends Context>(options: TapOptions<C>): MiddlewareFn<C> =>
-  async (ctx, next) => {
-    const { serverUrl, tapErrors = true, customProperties } = options;
+export const udpateTap = <C extends Context & TapFlavor>(
+  options: TapOptions<C>,
+  uuid: string,
+): MiddlewareFn<C> =>
+async (ctx, next) => {
+  ctx.tap = { uuid };
+  const { serverUrl, tapErrors = true, customProperties } = options;
 
-    const body = {
-      ...customProperties?.(ctx),
-      update: ctx.update,
-    };
-
-    try {
-      await Promise.all([
-        next(),
-        fetch(`${serverUrl}/update`, {
-          method: "POST",
-          body: JSON.stringify(body),
-        }).catch((err) =>
-          console.error(`Failed to send update to tap server: ${err}`)
-        ),
-      ]);
-    } catch (error) {
-      if (tapErrors) {
-        const body = {
-          error: {
-            message: error.message ?? "No error message",
-            name: error.name ?? "Unknown error",
-            stack: error.stack ?? "No stack trace",
-          },
-          ...customProperties?.(ctx),
-          update: ctx.update,
-        };
-
-        await fetch(`${serverUrl}/botError`, {
-          method: "POST",
-          body: JSON.stringify(body),
-        }).catch((err) =>
-          console.error(`Failed to send error to tap server: ${err}`)
-        );
-      }
-
-      throw error;
-    }
+  const body = {
+    ...customProperties?.(ctx),
+    update: ctx.update,
   };
+
+  try {
+    await Promise.all([
+      next(),
+      fetchWithUUID(uuid, `${serverUrl}/update`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      }).catch((err) =>
+        console.error(`Failed to send update to tap server: ${err}`)
+      ),
+    ]);
+  } catch (error) {
+    if (tapErrors) {
+      const body = {
+        error: {
+          message: error.message ?? "No error message",
+          name: error.name ?? "Unknown error",
+          stack: error.stack ?? "No stack trace",
+        },
+        ...customProperties?.(ctx),
+        update: ctx.update,
+      };
+
+      await fetchWithUUID(uuid, `${serverUrl}/botError`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      }).catch((err) =>
+        console.error(`Failed to send error to tap server: ${err}`)
+      );
+    }
+
+    throw error;
+  }
+};
 
 /**
  * Taps every request and update received from the Telegram API.
@@ -96,12 +124,13 @@ export const udpateTap =
  * @returns A middleware that sends the request and update to the tap server.
  */
 export const tap =
-  <C extends Context>(options: TapOptions<C>): MiddlewareFn<C> =>
+  <C extends Context & TapFlavor>(options: TapOptions<C>): MiddlewareFn<C> =>
   (
     ctx,
     next,
   ) => {
-    ctx.api.config.use(apiTap(options.serverUrl));
+    const uuid = options.sessionId ?? crypto.randomUUID();
+    ctx.api.config.use(apiTap(options.serverUrl, uuid));
 
-    return udpateTap(options)(ctx, next);
+    return udpateTap(options, uuid)(ctx, next);
   };
