@@ -42,6 +42,14 @@ function fetchWithUUID(
   });
 }
 
+function hasProperty<TProperty extends string>(
+  property: TProperty,
+  // deno-lint-ignore no-explicit-any
+  err: any,
+): err is { [k in TProperty]: string } {
+  return property in err;
+}
+
 /**
  * Taps every request sent to the Telegram API.
  *
@@ -97,9 +105,11 @@ async (ctx, next) => {
     if (tapErrors) {
       const body = {
         error: {
-          message: error.message ?? "No error message",
-          name: error.name ?? "Unknown error",
-          stack: error.stack ?? "No stack trace",
+          message: hasProperty("message", error)
+            ? error.message
+            : "No error message",
+          name: hasProperty("name", error) ? error.name : "Unknown error",
+          stack: hasProperty("stack", error) ? error.stack : "No stack trace",
         },
         ...customProperties?.(ctx),
         update: ctx.update,
